@@ -16,6 +16,6 @@ dependencies:
   - ipykernel==6.29.5
   - ipywidgets==8.1.5
   - nbformat==5.10.4
-  - pip
-  - pip:
-    - -e .
+  # - pip
+  # - pip:
+  #   - -e .
