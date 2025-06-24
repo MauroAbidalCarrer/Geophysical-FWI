@@ -1,46 +1,60 @@
 # See kaggle dataset page: https://www.kaggle.com/datasets/brendanartley/openfwi-preprocessed-72x72
 # See kaggle competition page: https://www.kaggle.com/competitions/waveform-inversion
-from os.path import join
+import json
+from math import sqrt
+from os.path import join, exists
 
 import torch
 import numpy as np
 import pandas as pd
-import plotly.express as px
+from rich.progress import track
 from kagglehub import dataset_download
 
 from config import DATASET_HANDLE, SAMPLES_PER_NPY_FILE
 
 
 DATASET_PATH = dataset_download(DATASET_HANDLE)
-print(DATASET_PATH)
 
 class PreprocessedOpenFWI(torch.utils.data.Dataset):
-    def __init__(self, train=True):
+    def __init__(self, train=True, force_samples_stats_compute=False):
         self.train = train
         # column fold is equal to -100 for training and 0 for validation
         fold_nb = str(-100 if train else 0)
-        self.metad_data = (
+        meta_df = (
             pd.read_csv(join(DATASET_PATH, "folds.csv"))
             .query(f"fold == {fold_nb}")
             .reset_index(drop=True)
         )
-        print(self.metad_data)
+        # load entirety of the dataset in the RAM
+        self.x = [load_npy(path) for path in track(meta_df["data_fpath"], "loading xs")]
+        print("concatenating xs")
+        self.x = torch.concatenate(self.x)
+        print("x:", self.x.shape)
+        self.y = [load_npy(path) for path in track(meta_df["label_fpath"], "loading ys")]
+        print("concatenating ys")
+        self.y = torch.concatenate(self.y)
+        print("y:", self.y.shape)
+
+        self.samples_stats = {
+            "x_mean": self.x.mean(),
+            "x_std": self.x.std(),
+            "y_mean": self.y.mean(),
+            "y_std": self.y.std(),
+        }
+        print(self.samples_stats)
 
     def __getitem__(self, idx):
-        meta_data_row_idx = idx // SAMPLES_PER_NPY_FILE
-        sample_idx_in_array = idx % SAMPLES_PER_NPY_FILE
-        x_path, y_path, family, _ = self.metad_data.iloc[meta_data_row_idx]
-        return (
-            np.load(join(DATASET_PATH, 'openfwi_72x72', x_path))[sample_idx_in_array],
-            np.load(join(DATASET_PATH, 'openfwi_72x72', y_path))[sample_idx_in_array],
-        )
+        return self.x[idx], self.y[idx]
 
-    def __len__(self, ):
-        return len(self.metad_data) * SAMPLES_PER_NPY_FILE
+    def __len__(self):
+        return len(self.x) * SAMPLES_PER_NPY_FILE
 
+def load_npy(path_in_dataset: str) -> np.ndarray:
+    path = join(DATASET_PATH, 'openfwi_72x72', path_in_dataset)
+    return torch.from_numpy(np.load(path))
 
 def test_dataset(train:bool):
-    dataset = PreprocessedOpenFWI(train)
+    dataset = PreprocessedOpenFWI(train, True)
     print("train:", train)
     print(dataset)
     print("len:", len(dataset))
