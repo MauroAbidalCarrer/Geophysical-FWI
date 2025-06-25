@@ -1,18 +1,22 @@
 # See kaggle dataset page: https://www.kaggle.com/datasets/brendanartley/openfwi-preprocessed-72x72
 # See kaggle competition page: https://www.kaggle.com/competitions/waveform-inversion
-import json
-from math import sqrt
-from os.path import join, exists
+# from statistics import mean
+# from math import mean
+from os.path import join
+from functools import partial
 
+import rich
+import rich.progress
 import torch
 import numpy as np
 import pandas as pd
-from rich.progress import track
 from kagglehub import dataset_download
 
 from config import DATASET_HANDLE, SAMPLES_PER_NPY_FILE
 
 
+# Make all track bars transient
+track = partial(rich.progress.track, transient=True)
 DATASET_PATH = dataset_download(DATASET_HANDLE)
 
 class PreprocessedOpenFWI(torch.utils.data.Dataset):
@@ -27,29 +31,45 @@ class PreprocessedOpenFWI(torch.utils.data.Dataset):
         )
         # load entirety of the dataset in the RAM
         self.x = [load_npy(path) for path in track(meta_df["data_fpath"], "loading xs")]
-        print("concatenating xs")
-        self.x = torch.concatenate(self.x)
-        print("x:", self.x.shape)
         self.y = [load_npy(path) for path in track(meta_df["label_fpath"], "loading ys")]
-        print("concatenating ys")
-        self.y = torch.concatenate(self.y)
-        print("y:", self.y.shape)
 
-        self.samples_stats = {
-            "x_mean": self.x.mean(),
-            "x_std": self.x.std(),
-            "y_mean": self.y.mean(),
-            "y_std": self.y.std(),
-        }
+        self.samples_stats = {}
+        self.samples_stats["x_mean"], self.samples_stats["x_std"] = welford_mean_std(self.x)
+        self.samples_stats["y_mean"], self.samples_stats["y_std"] = welford_mean_std(self.y)
         print(self.samples_stats)
 
-    def __getitem__(self, idx):
-        return self.x[idx], self.y[idx]
+    def __getitem__(self, idx) -> torch.Tensor:
+        list_idx = idx // SAMPLES_PER_NPY_FILE
+        tensor_idx = idx % SAMPLES_PER_NPY_FILE
+        return self.x[list_idx][tensor_idx], self.y[list_idx][tensor_idx]
 
     def __len__(self):
         return len(self.x) * SAMPLES_PER_NPY_FILE
 
-def load_npy(path_in_dataset: str) -> np.ndarray:
+def welford_mean_std(tensor_list):
+    count = 0
+    mean = torch.zeros(1, dtype=torch.float64)
+    M2 = torch.zeros(1, dtype=torch.float64)
+
+    for tensor in track(tensor_list, description="Computing stats"):
+        x = tensor.view(-1).to(torch.float64)
+        batch_count = x.numel()
+        batch_mean = x.mean()
+        batch_M2 = ((x - batch_mean) ** 2).sum()
+
+        delta = batch_mean - mean
+        total_count = count + batch_count
+
+        mean += delta * batch_count / total_count
+        M2 += batch_M2 + delta.pow(2) * count * batch_count / total_count
+        count = total_count
+
+    variance = M2 / count
+    std = variance.sqrt().item()
+    return mean.item(), std
+
+
+def load_npy(path_in_dataset: str) -> torch.Tensor:
     path = join(DATASET_PATH, 'openfwi_72x72', path_in_dataset)
     return torch.from_numpy(np.load(path))
 
