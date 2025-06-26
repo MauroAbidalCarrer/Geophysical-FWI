@@ -25,7 +25,8 @@ class UNet(nn.Module):
         self.up_blocks = nn.ModuleList()
         for in_chs, out_chs in pairwise([*chs_per_depth[::-1], out_channels]):
             self.up_blocks.append(ResidualBlock(in_chs * 2, out_chs))
-        self.last_conv = nn.Conv2d(out_channels, out_channels, 1)
+        # TODO: Remove head?
+        self.head_conv = nn.Conv2d(out_channels, out_channels, 3)
 
     def forward(self, x:Tensor) -> Tensor:
         # normed_x = (x - self.dataset_stats.get("x_mean", 0)) / self.dataset_stats.get("x_std", 1)
@@ -33,7 +34,7 @@ class UNet(nn.Module):
         out = self.bottle_neck_block(encoder_outputs[-1])
         for up_block, encode_output in zip(self.up_blocks, encoder_outputs[::-1]):
             out = decode(out, encode_output, up_block)
-        out = self.last_conv(out)
+        out = self.head_conv(out)
         # scaled_out = out * self.dataset_stats.get("y_std", 1) + self.dataset_stats.get("y_mean", 0)
         return out
 
