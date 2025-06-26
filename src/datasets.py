@@ -16,22 +16,22 @@ from config import DATASET_HANDLE, SAMPLES_PER_NPY_FILE
 
 
 # Make all track bars transient
-track = partial(rich.progress.track, transient=True)
-DATASET_PATH = dataset_download(DATASET_HANDLE)
+_track = partial(rich.progress.track, transient=True)
 
 class PreprocessedOpenFWI(torch.utils.data.Dataset):
     def __init__(self, train=True, force_samples_stats_compute=False):
         self.train = train
         # column fold is equal to -100 for training and 0 for validation
+        dataset_path = dataset_download(DATASET_HANDLE)
         fold_nb = str(-100 if train else 0)
         meta_df = (
-            pd.read_csv(join(DATASET_PATH, "folds.csv"))
+            pd.read_csv(join(dataset_path, "folds.csv"))
             .query(f"fold == {fold_nb}")
             .reset_index(drop=True)
         )
         # load entirety of the dataset in the RAM
-        self.x = [load_npy(path) for path in track(meta_df["data_fpath"], "loading xs")]
-        self.y = [load_npy(path) for path in track(meta_df["label_fpath"], "loading ys")]
+        self.x = [load_npy(path) for path in _track(meta_df["data_fpath"], "loading xs")]
+        self.y = [load_npy(path) for path in _track(meta_df["label_fpath"], "loading ys")]
 
         self.samples_stats = {}
         self.samples_stats["x_mean"], self.samples_stats["x_std"] = welford_mean_std(self.x)
@@ -51,7 +51,7 @@ def welford_mean_std(tensor_list):
     mean = torch.zeros(1, dtype=torch.float64)
     M2 = torch.zeros(1, dtype=torch.float64)
 
-    for tensor in track(tensor_list, description="Computing stats"):
+    for tensor in _track(tensor_list, description="Computing stats"):
         x = tensor.view(-1).to(torch.float64)
         batch_count = x.numel()
         batch_mean = x.mean()
