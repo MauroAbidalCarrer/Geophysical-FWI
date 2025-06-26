@@ -19,7 +19,7 @@ from config import DATASET_HANDLE, SAMPLES_PER_NPY_FILE
 _track = partial(rich.progress.track, transient=True)
 
 class PreprocessedOpenFWI(torch.utils.data.Dataset):
-    def __init__(self, train=True, force_samples_stats_compute=False):
+    def __init__(self, train=True):
         self.train = train
         # column fold is equal to -100 for training and 0 for validation
         dataset_path = dataset_download(DATASET_HANDLE)
@@ -30,8 +30,8 @@ class PreprocessedOpenFWI(torch.utils.data.Dataset):
             .reset_index(drop=True)
         )
         # load entirety of the dataset in the RAM
-        self.x = [load_npy(path) for path in _track(meta_df["data_fpath"], "loading xs")]
-        self.y = [load_npy(path) for path in _track(meta_df["label_fpath"], "loading ys")]
+        self.x = [load_npy(dataset_path, f_path) for f_path in _track(meta_df["data_fpath"], "loading xs")]
+        self.y = [load_npy(dataset_path, f_path) for f_path in _track(meta_df["label_fpath"], "loading ys")]
 
         self.samples_stats = {}
         self.samples_stats["x_mean"], self.samples_stats["x_std"] = welford_mean_std(self.x)
@@ -69,8 +69,8 @@ def welford_mean_std(tensor_list):
     return mean.item(), std
 
 
-def load_npy(path_in_dataset: str) -> torch.Tensor:
-    path = join(DATASET_PATH, 'openfwi_72x72', path_in_dataset)
+def load_npy(dataset_path:str, path_in_dataset: str) -> torch.Tensor:
+    path = join(dataset_path, 'openfwi_72x72', path_in_dataset)
     return torch.from_numpy(np.load(path))
 
 def test_dataset(train:bool):
