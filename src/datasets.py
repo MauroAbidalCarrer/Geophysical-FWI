@@ -1,8 +1,8 @@
 # See kaggle dataset page: https://www.kaggle.com/datasets/brendanartley/openfwi-preprocessed-72x72
 # See kaggle competition page: https://www.kaggle.com/competitions/waveform-inversion
-# from statistics import mean
-# from math import mean
-from os.path import join
+import json
+from os.path import join, exists
+from pathlib import Path
 from functools import partial
 
 import rich
@@ -19,8 +19,11 @@ from config import DATASET_HANDLE, SAMPLES_PER_NPY_FILE
 _track = partial(rich.progress.track, transient=True)
 
 class PreprocessedOpenFWI(torch.utils.data.Dataset):
-    def __init__(self, train=True):
+    def __init__(self, train=True, norm_input=True, norm_output=False, force_compute=False):
+        super().__init__()
         self.train = train
+        self.norm_input = norm_input
+        self.norm_output = norm_output
         # column fold is equal to -100 for training and 0 for validation
         dataset_path = dataset_download(DATASET_HANDLE)
         fold_nb = str(-100 if train else 0)
@@ -30,13 +33,10 @@ class PreprocessedOpenFWI(torch.utils.data.Dataset):
             .reset_index(drop=True)
         )
         # load entirety of the dataset in the RAM
-        self.x = [load_npy(dataset_path, f_path) for f_path in _track(meta_df["data_fpath"], "loading xs")]
-        self.y = [load_npy(dataset_path, f_path) for f_path in _track(meta_df["label_fpath"], "loading ys")]
+        self.x = [load_npy(dataset_path, f_path) for f_path in _track(meta_df["data_fpath"], "loading inputs")]
+        self.y = [load_npy(dataset_path, f_path) for f_path in _track(meta_df["label_fpath"], "loading outputs")]
 
-        self.samples_stats = {}
-        self.samples_stats["x_mean"], self.samples_stats["x_std"] = welford_mean_std(self.x)
-        self.samples_stats["y_mean"], self.samples_stats["y_std"] = welford_mean_std(self.y)
-        print(self.samples_stats)
+        self.set_stats(force_compute)
 
     def __getitem__(self, idx) -> torch.Tensor:
         list_idx = idx // SAMPLES_PER_NPY_FILE
@@ -46,12 +46,33 @@ class PreprocessedOpenFWI(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.x) * SAMPLES_PER_NPY_FILE
 
-def welford_mean_std(tensor_list):
+    def set_stats(self, force_compute=False) -> dict[str, torch.Tensor]:
+        stats_file_path = self.get_dataset_stats_file_path()
+        if force_compute or not exists(stats_file_path):
+            self.samples_stats = {}
+            self.samples_stats["x_mean"], self.samples_stats["x_std"] = compute_welford_mean_std(self.x)
+            self.samples_stats["y_mean"], self.samples_stats["y_std"] = compute_welford_mean_std(self.y)
+            with open(stats_file_path, "w") as fp:
+                json.dump(self.samples_stats, fp, indent=1)
+        else:
+            with open(stats_file_path, "r") as fp:
+                self.samples_stats = json.load(fp)
+
+    def get_dataset_stats_file_path(self) -> Path:
+        suffix = "train" if self.train else "test"
+        return (
+            Path(__file__)
+            .absolute()
+            .parent
+            .joinpath(f"dataset_stats_{suffix}.json")
+        )
+
+def compute_welford_mean_std(tensor_list):
     count = 0
     mean = torch.zeros(1, dtype=torch.float64)
     M2 = torch.zeros(1, dtype=torch.float64)
 
-    for tensor in _track(tensor_list, description="Computing stats"):
+    for tensor in _track(tensor_list, description="Computing dataset stats"):
         x = tensor.view(-1).to(torch.float64)
         batch_count = x.numel()
         batch_mean = x.mean()
