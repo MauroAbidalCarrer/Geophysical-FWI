@@ -19,7 +19,7 @@ from config import DATASET_HANDLE, SAMPLES_PER_NPY_FILE
 _track = partial(rich.progress.track, transient=True)
 
 class PreprocessedOpenFWI(torch.utils.data.Dataset):
-    def __init__(self, train=True, norm_input=True, norm_output=False, force_compute=False):
+    def __init__(self, train=True, norm_input=True, norm_output=False, force_compute=False, nb_files_to_load=None):
         super().__init__()
         self.train = train
         self.norm_input = norm_input
@@ -33,8 +33,9 @@ class PreprocessedOpenFWI(torch.utils.data.Dataset):
             .reset_index(drop=True)
         )
         # load entirety of the dataset in the RAM
-        self.x = [load_npy(dataset_path, f_path) for f_path in _track(meta_df["data_fpath"], "loading inputs")]
-        self.y = [load_npy(dataset_path, f_path) for f_path in _track(meta_df["label_fpath"], "loading outputs")]
+        nb_files_to_load = nb_files_to_load if nb_files_to_load else len(meta_df)
+        self.x = [load_npy(dataset_path, f_path) for f_path in _track(meta_df.loc[:nb_files_to_load, "data_fpath"], "loading inputs")]
+        self.y = [load_npy(dataset_path, f_path) for f_path in _track(meta_df.loc[:nb_files_to_load, "label_fpath"], "loading outputs")]
 
         self.set_stats(force_compute)
 
