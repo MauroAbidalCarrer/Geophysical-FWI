@@ -16,7 +16,7 @@ from config import DATASET_HANDLE, SAMPLES_PER_NPY_FILE
 
 
 # Make all track bars transient
-_track = partial(rich.progress.track, transient=True)
+_track = rich.progress.track # partial(rich.progress.track, transient=True)
 
 class PreprocessedOpenFWI(torch.utils.data.Dataset):
     def __init__(self, train=True, norm_input=True, norm_output=False, force_compute=False, nb_files_to_load=None):
@@ -42,7 +42,10 @@ class PreprocessedOpenFWI(torch.utils.data.Dataset):
     def __getitem__(self, idx) -> torch.Tensor:
         list_idx = idx // SAMPLES_PER_NPY_FILE
         tensor_idx = idx % SAMPLES_PER_NPY_FILE
-        return self.x[list_idx][tensor_idx], self.y[list_idx][tensor_idx]
+        return (
+            (self.x[list_idx][tensor_idx] - self.stats["x_mean"]) / self.stats["x_std"],
+            (self.y[list_idx][tensor_idx] - self.stats["y_mean"]) / self.stats["y_std"],
+        )
 
     def __len__(self):
         return len(self.x) * SAMPLES_PER_NPY_FILE
@@ -50,14 +53,14 @@ class PreprocessedOpenFWI(torch.utils.data.Dataset):
     def set_stats(self, force_compute=False) -> dict[str, torch.Tensor]:
         stats_file_path = self.get_dataset_stats_file_path()
         if force_compute or not exists(stats_file_path):
-            self.samples_stats = {}
-            self.samples_stats["x_mean"], self.samples_stats["x_std"] = compute_welford_mean_std(self.x)
-            self.samples_stats["y_mean"], self.samples_stats["y_std"] = compute_welford_mean_std(self.y)
+            self.stats = {}
+            self.stats["x_mean"], self.stats["x_std"] = compute_welford_mean_std(self.x)
+            self.stats["y_mean"], self.stats["y_std"] = compute_welford_mean_std(self.y)
             with open(stats_file_path, "w") as fp:
-                json.dump(self.samples_stats, fp, indent=1)
+                json.dump(self.stats, fp, indent=1)
         else:
             with open(stats_file_path, "r") as fp:
-                self.samples_stats = json.load(fp)
+                self.stats = json.load(fp)
 
     def get_dataset_stats_file_path(self) -> Path:
         suffix = "train" if self.train else "test"
