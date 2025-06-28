@@ -8,6 +8,7 @@ dependencies:
   - python=3.11.5
   - rich==13.9.4
   - pytorch==2.5.1
+  - python-kaleido==0.2.1
   - torchvision==0.20.1
   - plotly==5.19.0
   - pandas==2.2.2
