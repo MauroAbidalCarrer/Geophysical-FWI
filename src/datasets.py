@@ -1,3 +1,4 @@
+# This module is a bit dirty, I am finishing it ~2 days before the end of the competition...
 # See kaggle competition page: https://www.kaggle.com/competitions/waveform-inversion
 # See preprocessed test dataset: https://www.kaggle.com/datasets/egortrushin/open-wfi-test
 # See kaggle preprocessed train and validation datasets page: https://www.kaggle.com/datasets/brendanartley/openfwi-preprocessed-72x72
@@ -21,19 +22,21 @@ class TestPreprocessedOpenFWI(torch.utils.data.Dataset):
     def __init__(self, force_stats_compute=False):
         super().__init__()
         self.stats = _get_train_stats("train", force_stats_compute)
-        dataset_path = dataset_download(TEST_DATASET_HANDLE)
+        dataset_path = join(dataset_download(TEST_DATASET_HANDLE), "test")
         self.filenames = listdir(dataset_path)
-        self.x = [_load_npy_file_as_tensor(join(dataset_path, filename)) for filename in self.filenames]
+        load_as_tensor = lambda filename: torch.from_numpy(np.load(join(dataset_path, filename)))
+        files_it = track(self.filenames, description="Loading test inputs...")
+        self.x = list(map(load_as_tensor, files_it))
 
     def __getitem__(self, idx) -> tuple[str, torch.Tensor]:
         return (
             self.filenames[idx],
-            (self.x - self.stats["x_mean"]) / self.stats["x_std"],
+            (self.x[idx] - self.stats["x_mean"]) / self.stats["x_std"],
         )
 
     def __len__(self):
         return len(self.filenames)
-        
+
 class TrainValidationPreprocessedOpenFWI(torch.utils.data.Dataset):
     def __init__(self, split:str="train", force_stats_compute=False):
         super().__init__()
@@ -140,5 +143,12 @@ def _check_dataset_shape(split:str):
     print("=" * 20)
 
 if __name__ == "__main__":
+    test_dataset = TestPreprocessedOpenFWI()
+    print("test stats(train stats):", test_dataset.stats)
+    first_test_filename, first_test_input = test_dataset[0]
+    print("First test sample filename:", first_test_filename)
+    print("First test sample filename:", first_test_input.shape)
+    
     _check_dataset_shape("train")
     _check_dataset_shape("validation")
+    
