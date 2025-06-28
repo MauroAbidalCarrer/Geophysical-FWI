@@ -1,5 +1,6 @@
-# See kaggle dataset page: https://www.kaggle.com/datasets/brendanartley/openfwi-preprocessed-72x72
 # See kaggle competition page: https://www.kaggle.com/competitions/waveform-inversion
+# See preprocessed test dataset: https://www.kaggle.com/datasets/egortrushin/open-wfi-test
+# See kaggle preprocessed train and validation datasets page: https://www.kaggle.com/datasets/brendanartley/openfwi-preprocessed-72x72
 import json
 from os import listdir
 from pathlib import Path
@@ -19,7 +20,7 @@ from config import *
 class TestPreprocessedOpenFWI(torch.utils.data.Dataset):
     def __init__(self, force_stats_compute=False):
         super().__init__()
-        self.stats = _get_train_stats(force_stats_compute)
+        self.stats = _get_train_stats("train", force_stats_compute)
         dataset_path = dataset_download(TEST_DATASET_HANDLE)
         self.filenames = listdir(dataset_path)
         self.x = [_load_npy_file_as_tensor(join(dataset_path, filename)) for filename in self.filenames]
@@ -37,7 +38,7 @@ class TrainValidationPreprocessedOpenFWI(torch.utils.data.Dataset):
     def __init__(self, split:str="train", force_stats_compute=False):
         super().__init__()
         self.x, self.y = _load_dataset_tensors(split)
-        self.stats = _get_train_stats(force_stats_compute, self.x, self.y)
+        self.stats = _get_train_stats(split, force_stats_compute, self.x, self.y)
 
     def __getitem__(self, idx) -> torch.Tensor:
         list_idx = idx // SAMPLES_PER_NPY_FILE
@@ -50,8 +51,8 @@ class TrainValidationPreprocessedOpenFWI(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.x) * SAMPLES_PER_NPY_FILE
 
-def _get_train_stats(force_compute=False, x:list[Tensor]=None, y:list[Tensor]=None) -> dict:
-    stats_file_path = _get_dataset_stats_file_path()
+def _get_train_stats(split:str, force_compute=False, x:list[Tensor]=None, y:list[Tensor]=None) -> dict:
+    stats_file_path = _get_dataset_stats_file_path(split)
     if force_compute or not exists(stats_file_path):
         stats = {}
         if x is None or y is None:
@@ -83,13 +84,12 @@ def _load_dataset_tensors(split:str) -> tuple[Tensor, Tensor]:
 
     return x, y
 
-def _get_dataset_stats_file_path(self) -> Path:
-    suffix = "train" if self.train else "test"
+def _get_dataset_stats_file_path(split:str) -> Path:
     return (
         Path(__file__)
         .absolute()
         .parent
-        .joinpath(f"dataset_stats_{suffix}.json")
+        .joinpath(f"dataset_stats_{split}.json")
     )
 
 def compute_welford_mean_std(tensor_list):
