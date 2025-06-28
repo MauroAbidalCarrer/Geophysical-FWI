@@ -78,7 +78,7 @@ def _load_dataset_tensors(split:str) -> tuple[Tensor, Tensor]:
     elif split == "validation":
         fold_nb = 0
     else:
-        raise NotImplemented(f'{split} is not a valid split, either use "train" or "validation"')
+        raise NotImplementedError(f'{split} is not a valid split, either use "train" or "validation"')
     meta_df = (
         pd.read_csv(join(dataset_path, "folds.csv"))
         .query(f"fold == {fold_nb}")
