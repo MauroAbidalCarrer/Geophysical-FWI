@@ -1,6 +1,7 @@
 # See kaggle dataset page: https://www.kaggle.com/datasets/brendanartley/openfwi-preprocessed-72x72
 # See kaggle competition page: https://www.kaggle.com/competitions/waveform-inversion
 import json
+from os import listdir
 from pathlib import Path
 from typing import LiteralString
 from os.path import join, exists
@@ -15,12 +16,24 @@ from kagglehub import dataset_download
 from config import *
 
 
-class _TestPreprocessedOpenFWI(torch.utils.data.Dataset):
+class TestPreprocessedOpenFWI(torch.utils.data.Dataset):
     def __init__(self, force_stats_compute=False):
         super().__init__()
         self.stats = _get_train_stats(force_stats_compute)
+        dataset_path = dataset_download(TEST_DATASET_HANDLE)
+        self.filenames = listdir(dataset_path)
+        self.x = [_load_npy_file_as_tensor(join(dataset_path, filename)) for filename in self.filenames]
         
-class _TrainValidationPreprocessedOpenFWI(torch.utils.data.Dataset):
+    def __getitem__(self, idx) -> tuple[str, torch.Tensor]:
+        return (
+            self.filenames[idx],
+            (self.x - self.stats["x_mean"]) / self.stats["x_std"],
+        )
+    
+    def __len__(self):
+        return len(self.filenames)
+        
+class TrainValidationPreprocessedOpenFWI(torch.utils.data.Dataset):
     def __init__(self, split:str="train", force_stats_compute=False):
         super().__init__()
         self.x, self.y = _load_dataset_tensors(split)
@@ -106,7 +119,7 @@ def _load_npy_file_as_tensor(dataset_path:str, path_in_dataset: str) -> torch.Te
     return torch.from_numpy(np.load(path))
 
 def _check_dataset_shape(split:str):
-    dataset = _TrainValidationPreprocessedOpenFWI(split)
+    dataset = TrainValidationPreprocessedOpenFWI(split)
     print("split:", split)
     print(dataset)
     print("len:", len(dataset))
