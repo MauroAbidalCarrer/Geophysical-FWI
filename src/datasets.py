@@ -24,13 +24,13 @@ class TestPreprocessedOpenFWI(torch.utils.data.Dataset):
         dataset_path = dataset_download(TEST_DATASET_HANDLE)
         self.filenames = listdir(dataset_path)
         self.x = [_load_npy_file_as_tensor(join(dataset_path, filename)) for filename in self.filenames]
-        
+
     def __getitem__(self, idx) -> tuple[str, torch.Tensor]:
         return (
             self.filenames[idx],
             (self.x - self.stats["x_mean"]) / self.stats["x_std"],
         )
-    
+
     def __len__(self):
         return len(self.filenames)
         
@@ -70,15 +70,18 @@ def _get_train_stats(split:str, force_compute=False, x:list[Tensor]=None, y:list
 def _load_dataset_tensors(split:str) -> tuple[Tensor, Tensor]:
     dataset_path = dataset_download(TRAIN_VALIDAION_DATASET_HANDLE)
     # column "fold" is equal to -100 for training and 0 for validation see kaggle dataset description
-    fold_nb = str(-100 if split == "train" else 0)
+    if split == "train":
+        fold_nb = -100 
+    elif split == "validation":
+        fold_nb = 0
+    else:
+        raise NotImplemented(f'{split} is not a valid split, either use "train" or "validation"')
     meta_df = (
         pd.read_csv(join(dataset_path, "folds.csv"))
         .query(f"fold == {fold_nb}")
         .reset_index(drop=True)
     )
-    # load entirety of the dataset in the RAM or subset if nb_files_to_load is not None/null
-    nb_files_to_load = nb_files_to_load if nb_files_to_load else len(meta_df)
-    tensors_it = lambda path, files_group: track(meta_df.loc[:nb_files_to_load, path], files_group)
+    tensors_it = lambda path, files_group: track(meta_df[path], files_group)
     x = [_load_npy_file_as_tensor(dataset_path, f_path) for f_path in tensors_it("data_fpath", "loading inputs")]
     y = [_load_npy_file_as_tensor(dataset_path, f_path) for f_path in tensors_it("label_fpath", "loading outputs")]
 
@@ -133,8 +136,9 @@ def _check_dataset_shape(split:str):
     test_sample(0)
     test_sample(100)
     test_sample(len(dataset) - 1)
+    print("stats:", dataset.stats)
     print("=" * 20)
 
 if __name__ == "__main__":
-    _check_dataset_shape(True)
-    _check_dataset_shape(False)
+    _check_dataset_shape("train")
+    _check_dataset_shape("validation")
