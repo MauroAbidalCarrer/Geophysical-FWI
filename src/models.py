@@ -7,6 +7,16 @@ from torch.nn.functional import max_pool2d, interpolate
 
 from config import CHANNELS_DIMENSION
 
+def mk_model(to_cuda=True) -> nn.Module:
+    model = UNet(
+        in_channels=5,
+        out_channels=1,
+        start_features=32,
+        depth=4
+    )
+    if to_cuda:
+        return model.cuda()
+    return model
 
 class UNet(nn.Module):
     def __init__(self, in_channels:int, out_channels:int, start_features:int, depth:int, dataset_stats:dict[str, float]={}):
