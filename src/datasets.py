@@ -6,7 +6,7 @@ import json
 from os import listdir
 from pathlib import Path
 from typing import LiteralString
-from os.path import join, exists
+from os.path import join, exists, basename
 
 import torch
 import numpy as np
@@ -30,7 +30,7 @@ class TestPreprocessedOpenFWI(torch.utils.data.Dataset):
 
     def __getitem__(self, idx) -> tuple[str, torch.Tensor]:
         return (
-            self.filenames[idx],
+            basename(self.filenames[idx]),
             (self.x[idx] - self.stats["x_mean"]) / self.stats["x_std"],
         )
 
