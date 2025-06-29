@@ -38,9 +38,9 @@ class TestPreprocessedOpenFWI(torch.utils.data.Dataset):
         return len(self.filenames)
 
 class TrainValidationPreprocessedOpenFWI(torch.utils.data.Dataset):
-    def __init__(self, split:str="train", force_stats_compute=False):
+    def __init__(self, split:str="train", nb_files=None, force_stats_compute=False):
         super().__init__()
-        self.x, self.y = _load_dataset_tensors(split)
+        self.x, self.y = _load_dataset_tensors(split, nb_files)
         self.stats = _get_train_stats(split, force_stats_compute, self.x, self.y)
 
     def __getitem__(self, idx) -> torch.Tensor:
@@ -70,7 +70,7 @@ def _get_train_stats(split:str, force_compute=False, x:list[Tensor]=None, y:list
 
     return stats
 
-def _load_dataset_tensors(split:str) -> tuple[Tensor, Tensor]:
+def _load_dataset_tensors(split:str, nb_files=None) -> tuple[Tensor, Tensor]:
     dataset_path = dataset_download(TRAIN_VALIDAION_DATASET_HANDLE)
     # column "fold" is equal to -100 for training and 0 for validation see kaggle dataset description
     if split == "train":
@@ -84,11 +84,17 @@ def _load_dataset_tensors(split:str) -> tuple[Tensor, Tensor]:
         .query(f"fold == {fold_nb}")
         .reset_index(drop=True)
     )
-    tensors_it = lambda path, files_group: track(meta_df[path], files_group)
+    print(len(meta_df))
+    nb_files = nb_files if nb_files else len(meta_df)
+    tensors_it = lambda path, files_group: track(meta_df.loc[:nb_files, path], files_group)
     x = [_load_npy_file_as_tensor(dataset_path, f_path) for f_path in tensors_it("data_fpath", "loading inputs")]
     y = [_load_npy_file_as_tensor(dataset_path, f_path) for f_path in tensors_it("label_fpath", "loading outputs")]
 
     return x, y
+
+def _load_npy_file_as_tensor(dataset_path:str, path_in_dataset: str) -> torch.Tensor:
+    path = join(dataset_path, 'openfwi_72x72', path_in_dataset)
+    return torch.from_numpy(np.load(path))
 
 def _get_dataset_stats_file_path(split:str) -> Path:
     return (
@@ -119,10 +125,6 @@ def compute_welford_mean_std(tensor_list):
     variance = M2 / count
     std = variance.sqrt().item()
     return mean.item(), std
-
-def _load_npy_file_as_tensor(dataset_path:str, path_in_dataset: str) -> torch.Tensor:
-    path = join(dataset_path, 'openfwi_72x72', path_in_dataset)
-    return torch.from_numpy(np.load(path))
 
 def _check_dataset_shape(split:str):
     dataset = TrainValidationPreprocessedOpenFWI(split)
