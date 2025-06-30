@@ -1,43 +1,48 @@
-# See kaggle dataset page: https://www.kaggle.com/datasets/brendanartley/openfwi-preprocessed-72x72
+# This module is a bit dirty, I am finishing it ~2 days before the end of the competition...
 # See kaggle competition page: https://www.kaggle.com/competitions/waveform-inversion
+# See preprocessed test dataset: https://www.kaggle.com/datasets/egortrushin/open-wfi-test
+# See kaggle preprocessed train and validation datasets page: https://www.kaggle.com/datasets/brendanartley/openfwi-preprocessed-72x72
 import json
-from os.path import join, exists
+from os import listdir
 from pathlib import Path
-from functools import partial
+from typing import LiteralString
+from os.path import join, exists, splitext
 
-import rich
-import rich.progress
 import torch
 import numpy as np
 import pandas as pd
+from torch import Tensor
+from rich.progress import track
 from kagglehub import dataset_download
 
-from config import DATASET_HANDLE, SAMPLES_PER_NPY_FILE
+from config import *
 
 
-# Make all track bars transient
-_track = rich.progress.track # partial(rich.progress.track, transient=True)
-
-class PreprocessedOpenFWI(torch.utils.data.Dataset):
-    def __init__(self, train=True, norm_input=True, norm_output=False, force_compute=False, nb_files_to_load=None):
+class TestPreprocessedOpenFWI(torch.utils.data.Dataset):
+    def __init__(self, force_stats_compute=False, nb_subset:int=None):
         super().__init__()
-        self.train = train
-        self.norm_input = norm_input
-        self.norm_output = norm_output
-        # column fold is equal to -100 for training and 0 for validation
-        dataset_path = dataset_download(DATASET_HANDLE)
-        fold_nb = str(-100 if train else 0)
-        meta_df = (
-            pd.read_csv(join(dataset_path, "folds.csv"))
-            .query(f"fold == {fold_nb}")
-            .reset_index(drop=True)
-        )
-        # load entirety of the dataset in the RAM
-        nb_files_to_load = nb_files_to_load if nb_files_to_load else len(meta_df)
-        self.x = [load_npy(dataset_path, f_path) for f_path in _track(meta_df.loc[:nb_files_to_load, "data_fpath"], "loading inputs")]
-        self.y = [load_npy(dataset_path, f_path) for f_path in _track(meta_df.loc[:nb_files_to_load, "label_fpath"], "loading outputs")]
+        self.stats = _get_train_stats("train", force_stats_compute)
+        dataset_path = join(dataset_download(TEST_DATASET_HANDLE), "test")
+        self.filenames = listdir(dataset_path)
+        load_as_tensor = lambda filename: torch.from_numpy(np.load(join(dataset_path, filename)))
+        nb_subset = nb_subset if nb_subset else len(self.filenames)
+        files_it = track(self.filenames[:nb_subset], description="Loading test inputs...")
+        self.x = list(map(load_as_tensor, files_it))
 
-        self.set_stats(force_compute)
+    def __getitem__(self, idx) -> tuple[str, torch.Tensor]:
+        return (
+            splitext(self.filenames[idx])[0],
+            (self.x[idx] - self.stats["x_mean"]) / self.stats["x_std"],
+        )
+
+    def __len__(self):
+        return len(self.filenames)
+
+class TrainValidationPreprocessedOpenFWI(torch.utils.data.Dataset):
+    def __init__(self, split:str="train", nb_files=None, force_stats_compute=False):
+        super().__init__()
+        self.x, self.y = _load_dataset_tensors(split, nb_files)
+        self.stats = _get_train_stats(split, force_stats_compute, self.x, self.y)
 
     def __getitem__(self, idx) -> torch.Tensor:
         list_idx = idx // SAMPLES_PER_NPY_FILE
@@ -50,33 +55,62 @@ class PreprocessedOpenFWI(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.x) * SAMPLES_PER_NPY_FILE
 
-    def set_stats(self, force_compute=False) -> dict[str, torch.Tensor]:
-        stats_file_path = self.get_dataset_stats_file_path()
-        if force_compute or not exists(stats_file_path):
-            self.stats = {}
-            self.stats["x_mean"], self.stats["x_std"] = compute_welford_mean_std(self.x)
-            self.stats["y_mean"], self.stats["y_std"] = compute_welford_mean_std(self.y)
-            with open(stats_file_path, "w") as fp:
-                json.dump(self.stats, fp, indent=1)
-        else:
-            with open(stats_file_path, "r") as fp:
-                self.stats = json.load(fp)
+def _get_train_stats(split:str, force_compute=False, x:list[Tensor]=None, y:list[Tensor]=None) -> dict:
+    stats_file_path = _get_dataset_stats_file_path(split)
+    if force_compute or not exists(stats_file_path):
+        stats = {}
+        if x is None or y is None:
+            x, y = _load_dataset_tensors("train")
+        stats["x_mean"], stats["x_std"] = compute_welford_mean_std(x)
+        stats["y_mean"], stats["y_std"] = compute_welford_mean_std(y)
+        with open(stats_file_path, "w") as fp:
+            json.dump(stats, fp, indent=1)
+    else:
+        with open(stats_file_path, "r") as fp:
+            stats = json.load(fp)
 
-    def get_dataset_stats_file_path(self) -> Path:
-        suffix = "train" if self.train else "test"
-        return (
-            Path(__file__)
-            .absolute()
-            .parent
-            .joinpath(f"dataset_stats_{suffix}.json")
-        )
+    return stats
+
+def _load_dataset_tensors(split:str, nb_files=None) -> tuple[Tensor, Tensor]:
+    dataset_path = dataset_download(TRAIN_VALIDAION_DATASET_HANDLE)
+    # column "fold" is equal to -100 for training and 0 for validation see kaggle dataset description
+    if split == "train":
+        fold_nb = -100 
+    elif split == "validation":
+        fold_nb = 0
+    else:
+        raise NotImplementedError(f'{split} is not a valid split, either use "train" or "validation"')
+    meta_df = (
+        pd.read_csv(join(dataset_path, "folds.csv"))
+        .query(f"fold == {fold_nb}")
+        .reset_index(drop=True)
+    )
+    print(len(meta_df))
+    nb_files = nb_files if nb_files else len(meta_df)
+    tensors_it = lambda path, files_group: track(meta_df.loc[:nb_files, path], files_group)
+    x = [_load_npy_file_as_tensor(dataset_path, f_path) for f_path in tensors_it("data_fpath", "loading inputs")]
+    y = [_load_npy_file_as_tensor(dataset_path, f_path) for f_path in tensors_it("label_fpath", "loading outputs")]
+
+    return x, y
+
+def _load_npy_file_as_tensor(dataset_path:str, path_in_dataset: str) -> torch.Tensor:
+    path = join(dataset_path, 'openfwi_72x72', path_in_dataset)
+    return torch.from_numpy(np.load(path))
+
+def _get_dataset_stats_file_path(split:str) -> Path:
+    return (
+        Path(__file__)
+        .absolute()
+        .parent
+        .joinpath(f"dataset_stats_{split}.json")
+    )
 
 def compute_welford_mean_std(tensor_list):
     count = 0
     mean = torch.zeros(1, dtype=torch.float64)
     M2 = torch.zeros(1, dtype=torch.float64)
 
-    for tensor in _track(tensor_list, description="Computing dataset stats"):
+    for tensor in track(tensor_list, description="Computing dataset stats"):
         x = tensor.view(-1).to(torch.float64)
         batch_count = x.numel()
         batch_mean = x.mean()
@@ -93,14 +127,9 @@ def compute_welford_mean_std(tensor_list):
     std = variance.sqrt().item()
     return mean.item(), std
 
-
-def load_npy(dataset_path:str, path_in_dataset: str) -> torch.Tensor:
-    path = join(dataset_path, 'openfwi_72x72', path_in_dataset)
-    return torch.from_numpy(np.load(path))
-
-def test_dataset(train:bool):
-    dataset = PreprocessedOpenFWI(train, True)
-    print("train:", train)
+def _check_dataset_shape(split:str):
+    dataset = TrainValidationPreprocessedOpenFWI(split)
+    print("split:", split)
     print(dataset)
     print("len:", len(dataset))
     def test_sample(idx:int):
@@ -113,8 +142,16 @@ def test_dataset(train:bool):
     test_sample(0)
     test_sample(100)
     test_sample(len(dataset) - 1)
+    print("stats:", dataset.stats)
     print("=" * 20)
 
 if __name__ == "__main__":
-    test_dataset(True)
-    test_dataset(False)
+    test_dataset = TestPreprocessedOpenFWI()
+    print("test stats(train stats):", test_dataset.stats)
+    first_test_filename, first_test_input = test_dataset[0]
+    print("First test sample filename:", first_test_filename)
+    print("First test sample filename:", first_test_input.shape)
+    
+    _check_dataset_shape("train")
+    _check_dataset_shape("validation")
+    
