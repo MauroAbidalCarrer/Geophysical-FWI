@@ -19,13 +19,14 @@ from config import *
 
 
 class TestPreprocessedOpenFWI(torch.utils.data.Dataset):
-    def __init__(self, force_stats_compute=False):
+    def __init__(self, force_stats_compute=False, nb_subset:int=None):
         super().__init__()
         self.stats = _get_train_stats("train", force_stats_compute)
         dataset_path = join(dataset_download(TEST_DATASET_HANDLE), "test")
         self.filenames = listdir(dataset_path)
         load_as_tensor = lambda filename: torch.from_numpy(np.load(join(dataset_path, filename)))
-        files_it = track(self.filenames, description="Loading test inputs...")
+        nb_subset = nb_subset if nb_subset else len(self.filenames)
+        files_it = track(self.filenames[:nb_subset], description="Loading test inputs...")
         self.x = list(map(load_as_tensor, files_it))
 
     def __getitem__(self, idx) -> tuple[str, torch.Tensor]:
