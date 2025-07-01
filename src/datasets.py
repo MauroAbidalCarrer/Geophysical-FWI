@@ -1,11 +1,9 @@
-# This module is a bit dirty, I am finishing it ~2 days before the end of the competition...
 # See kaggle competition page: https://www.kaggle.com/competitions/waveform-inversion
 # See preprocessed test dataset: https://www.kaggle.com/datasets/egortrushin/open-wfi-test
 # See kaggle preprocessed train and validation datasets page: https://www.kaggle.com/datasets/brendanartley/openfwi-preprocessed-72x72
 import json
 from os import listdir
 from pathlib import Path
-from typing import LiteralString
 from os.path import join, exists, splitext
 
 import torch
@@ -17,6 +15,8 @@ from kagglehub import dataset_download
 
 from config import *
 
+
+_stats_type = dict[str, dict[str, Tensor]]
 
 class TestPreprocessedOpenFWI(torch.utils.data.Dataset):
     def __init__(self, force_stats_compute=False, nb_subset:int=None):
@@ -39,17 +39,15 @@ class TestPreprocessedOpenFWI(torch.utils.data.Dataset):
         return len(self.filenames)
 
 class TrainValidationPreprocessedOpenFWI(torch.utils.data.Dataset):
-    def __init__(self, split:str="train", nb_files=None, force_stats_compute=False):
+    def __init__(self, split:str="train", nb_files=None):
         super().__init__()
         self.x, self.y = _load_dataset_tensors(split, nb_files)
-        self.stats = _get_train_stats(split, force_stats_compute, self.x, self.y)
+        self.stats = _get_train_stats(split, self.x, self.y)
 
     def __getitem__(self, idx) -> torch.Tensor:
         list_idx = idx // SAMPLES_PER_NPY_FILE
         tensor_idx = idx % SAMPLES_PER_NPY_FILE
         return (
-            # (self.x[list_idx][tensor_idx] - self.stats["x_mean"]) / self.stats["x_std"],
-            # (self.y[list_idx][tensor_idx] - self.stats["y_mean"]) / self.stats["y_std"],
             self.x[list_idx][tensor_idx],
             self.y[list_idx][tensor_idx],
         )
@@ -57,20 +55,37 @@ class TrainValidationPreprocessedOpenFWI(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.x) * SAMPLES_PER_NPY_FILE
 
-def _get_train_stats(split:str, force_compute=False, x:list[Tensor]=None, y:list[Tensor]=None) -> dict:
+def _get_train_stats(split:str, x:list[Tensor]=None, y:list[Tensor]=None) -> _stats_type:
     stats_file_path = _get_dataset_stats_file_path(split)
-    if force_compute or not exists(stats_file_path):
-        stats = {}
+    if not exists(stats_file_path):
         if x is None or y is None:
             x, y = _load_dataset_tensors("train")
-        stats["x_mean"], stats["x_std"] = compute_welford_mean_std(x)
-        stats["y_mean"], stats["y_std"] = compute_welford_mean_std(y)
-        with open(stats_file_path, "w") as fp:
-            json.dump(stats, fp, indent=1)
+        stats = {
+            "x": _compute_all_stats(x),
+            "y": _compute_all_stats(y),
+        }
+        _save_stats_to_json(stats, stats_file_path)
+        return stats
     else:
-        with open(stats_file_path, "r") as fp:
-            stats = json.load(fp)
+        return load_stats_from_json(stats_file_path)
 
+def _save_stats_to_json(stats: _stats_type, filepath: str):
+    # Convert tensors to nested lists for JSON compatibility
+    serializable_stats = {
+        "x": {key: value.tolist() for key, value in stats["x"].items()},
+        "y": {key: value.tolist() for key, value in stats["y"].items()},
+    }
+    with open(filepath, "w") as fp:
+        json.dump(serializable_stats, fp, indent=1)
+
+def load_stats_from_json(filepath: str) -> _stats_type:
+    with open(filepath, "r") as fp:
+        serialized_stats = json.load(fp)
+    # Convert lists back to tensors
+    stats = {
+        "x": {key: torch.tensor(value) for key, value in serialized_stats["x"].items()},
+        "y": {key: torch.tensor(value) for key, value in serialized_stats["y"].items()},
+    }
     return stats
 
 def _load_dataset_tensors(split:str, nb_files=None) -> tuple[Tensor, Tensor]:
@@ -87,7 +102,6 @@ def _load_dataset_tensors(split:str, nb_files=None) -> tuple[Tensor, Tensor]:
         .query(f"fold == {fold_nb}")
         .reset_index(drop=True)
     )
-    print(len(meta_df))
     nb_files = nb_files if nb_files else len(meta_df)
     tensors_it = lambda path, files_group: track(meta_df.loc[:nb_files, path], files_group)
     x = [_load_npy_file_as_tensor(dataset_path, f_path) for f_path in tensors_it("data_fpath", "loading inputs")]
@@ -107,12 +121,18 @@ def _get_dataset_stats_file_path(split:str) -> Path:
         .joinpath(f"dataset_stats_{split}.json")
     )
 
-def compute_welford_mean_std(tensor_list):
+def _compute_all_stats(batches_list: list[Tensor]) -> _stats_type:
+    return {
+        **_compute_pixel_agnostic_welford_mean_std(batches_list),
+        **_compute_pixel_wise_welford_mean_std(batches_list),
+    }
+
+def _compute_pixel_agnostic_welford_mean_std(batches_list: list[Tensor]) -> dict[str, Tensor]:
     count = 0
     mean = torch.zeros(1, dtype=torch.float64)
     M2 = torch.zeros(1, dtype=torch.float64)
 
-    for tensor in track(tensor_list, description="Computing dataset stats"):
+    for tensor in track(batches_list, description="Computing dataset stats"):
         x = tensor.view(-1).to(torch.float64)
         batch_count = x.numel()
         batch_mean = x.mean()
@@ -127,7 +147,42 @@ def compute_welford_mean_std(tensor_list):
 
     variance = M2 / count
     std = variance.sqrt().item()
-    return mean.item(), std
+    return {
+        "mean": mean.item(),
+        "std": std,
+    }
+
+def _compute_pixel_wise_welford_mean_std(batches_list: list[Tensor]) -> dict[str, Tensor]:
+    first = next(iter(batches_list))
+    mean = torch.zeros_like(first[0], dtype=torch.float64)
+    M2 = torch.zeros_like(first[0], dtype=torch.float64)
+    count = 0
+
+    # Re-inject the first batch
+    batches_list = [first] + list(batches_list)
+
+    for batch in track(batches_list, description="Computing pixel-wise stats"):
+        batch = batch.to(torch.float64)  # shape: (N, C, H, W)
+        batch_count = batch.shape[0]
+
+        batch_mean = batch.mean(dim=0)  # shape: (C, H, W)
+        batch_M2 = ((batch - batch_mean)**2).sum(dim=0)  # shape: (C, H, W)
+
+        delta = batch_mean - mean
+        total_count = count + batch_count
+
+        mean += delta * batch_count / total_count
+        M2 += batch_M2 + delta.pow(2) * count * batch_count / total_count
+
+        count = total_count
+
+    variance = M2 / count
+    std = torch.clamp(variance.sqrt(), min=EPSILON)
+
+    return {
+        "pxiel_wise_mean": mean.float(),
+        "pxiel_wise_std": std.float()
+    }
 
 def _check_dataset_shape(split:str):
     dataset = TrainValidationPreprocessedOpenFWI(split)
