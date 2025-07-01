@@ -16,7 +16,7 @@ from kagglehub import dataset_download
 from config import *
 
 
-_stats_type = dict[str, dict[str, Tensor]]
+_stats_type = dict[str, dict[str, dict[str, Tensor]]]
 
 class TestPreprocessedOpenFWI(torch.utils.data.Dataset):
     def __init__(self, force_stats_compute=False, nb_subset:int=None):
@@ -61,8 +61,14 @@ def _get_train_stats(split:str, x:list[Tensor]=None, y:list[Tensor]=None) -> _st
         if x is None or y is None:
             x, y = _load_dataset_tensors("train")
         stats = {
-            "x": _compute_all_stats(x),
-            "y": _compute_all_stats(y),
+            "pixel_wise_stats": {
+                "x": _compute_pixel_wise_welford_mean_std(x),
+                "y": _compute_pixel_wise_welford_mean_std(y),
+            },
+            "pixel_agnostic_stats": {
+                "x": _compute_pixel_agnostic_welford_mean_std(x),
+                "y": _compute_pixel_agnostic_welford_mean_std(y),
+            }
         }
         _save_stats_to_json(stats, stats_file_path)
         return stats
@@ -72,8 +78,11 @@ def _get_train_stats(split:str, x:list[Tensor]=None, y:list[Tensor]=None) -> _st
 def _save_stats_to_json(stats: _stats_type, filepath: str):
     # Convert tensors to nested lists for JSON compatibility
     serializable_stats = {
-        "x": {key: value.tolist() for key, value in stats["x"].items()},
-        "y": {key: value.tolist() for key, value in stats["y"].items()},
+        "pixel_wise_stats": {
+            "x": {key: value.tolist() for key, value in stats["pixel_wise_stats"]["x"].items()},
+            "y": {key: value.tolist() for key, value in stats["pixel_wise_stats"]["y"].items()},
+        },
+        "pixel_agnostic_stats": stats["pixel_agnostic_stats"],
     }
     with open(filepath, "w") as fp:
         json.dump(serializable_stats, fp, indent=1)
@@ -82,11 +91,13 @@ def load_stats_from_json(filepath: str) -> _stats_type:
     with open(filepath, "r") as fp:
         serialized_stats = json.load(fp)
     # Convert lists back to tensors
-    stats = {
-        "x": {key: torch.tensor(value) for key, value in serialized_stats["x"].items()},
-        "y": {key: torch.tensor(value) for key, value in serialized_stats["y"].items()},
+    return {
+        "pixel_wise_stats": {
+            "x": {key: torch.tensor(value) for key, value in serialized_stats["pixel_wise_stats"]["x"].items()},
+            "y": {key: torch.tensor(value) for key, value in serialized_stats["pixel_wise_stats"]["y"].items()},
+        },
+        "pixel_agnostic_stats": serialized_stats["pixel_agnostic_stats"],
     }
-    return stats
 
 def _load_dataset_tensors(split:str, nb_files=None) -> tuple[Tensor, Tensor]:
     dataset_path = dataset_download(TRAIN_VALIDAION_DATASET_HANDLE)
@@ -120,12 +131,6 @@ def _get_dataset_stats_file_path(split:str) -> Path:
         .parent
         .joinpath(f"dataset_stats_{split}.json")
     )
-
-def _compute_all_stats(batches_list: list[Tensor]) -> _stats_type:
-    return {
-        **_compute_pixel_agnostic_welford_mean_std(batches_list),
-        **_compute_pixel_wise_welford_mean_std(batches_list),
-    }
 
 def _compute_pixel_agnostic_welford_mean_std(batches_list: list[Tensor]) -> dict[str, Tensor]:
     count = 0
@@ -177,11 +182,12 @@ def _compute_pixel_wise_welford_mean_std(batches_list: list[Tensor]) -> dict[str
         count = total_count
 
     variance = M2 / count
+    # Ensure that there are no zeros in the std 
     std = torch.clamp(variance.sqrt(), min=EPSILON)
 
     return {
-        "pxiel_wise_mean": mean.float(),
-        "pxiel_wise_std": std.float()
+        "mean": mean.float(),
+        "std": std.float()
     }
 
 def _check_dataset_shape(split:str):
@@ -202,13 +208,6 @@ def _check_dataset_shape(split:str):
     print("stats:", dataset.stats)
     print("=" * 20)
 
-if __name__ == "__main__":
-    test_dataset = TestPreprocessedOpenFWI()
-    print("test stats(train stats):", test_dataset.stats)
-    first_test_filename, first_test_input = test_dataset[0]
-    print("First test sample filename:", first_test_filename)
-    print("First test sample filename:", first_test_input.shape)
-    
-    _check_dataset_shape("train")
-    _check_dataset_shape("validation")
-    
+# if __name__ == "__main__":  
+_check_dataset_shape("train")
+_check_dataset_shape("validation")
