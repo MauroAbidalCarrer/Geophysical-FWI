@@ -74,6 +74,6 @@ def _check_dataset_shape(split:str):
     test_sample(len(dataset) - 1)
     print("=" * 20)
 
-# if __name__ == "__main__":  
-_check_dataset_shape("train")
-_check_dataset_shape("validation")
+if __name__ == "__main__":  
+    _check_dataset_shape("train")
+    _check_dataset_shape("validation")
