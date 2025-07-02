@@ -6,14 +6,18 @@ from torch import Tensor
 from torch.nn.functional import max_pool2d, interpolate
 
 from config import CHANNELS_DIMENSION
+from datasets_stats import get_training_stats
 
 
-def mk_model(to_cuda=True) -> nn.Module:
+def mk_model(to_cuda=True, stats=None) -> nn.Module:
+    if stats is None:
+        stats = get_training_stats()
     model = UNet(
         in_channels=5,
         out_channels=1,
         start_features=32,
-        depth=4
+        depth=4,
+        stats=stats,
     )
     if to_cuda:
         return model.cuda()
