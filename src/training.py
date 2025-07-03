@@ -1,10 +1,11 @@
 import os
+# from tqdm import tqdm
 from datetime import datetime
 
 import torch
 from torch import nn
 import plotly.express as px
-from rich.progress import track
+from rich.progress import Progress, Task, track
 from pandas import DataFrame as DF
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader as DL
@@ -16,7 +17,10 @@ def fit(epochs:int,
         scheduler: LRScheduler,
         optimizer: torch.optim.Optimizer,
         train_loader: DL,
+        criterion: callable=nn.L1Loss(),
         evaluation_func: callable=None,
+        validation_loader: DL=None,
+        save_checkpoints=True,
     ) -> DF:
     # Setup
     scaler = GradScaler(device="cuda")
@@ -27,58 +31,71 @@ def fit(epochs:int,
     for epoch in range(epochs):
         total_epoch_loss = 0
         nb_samples = 0
-        progress = track(train_loader, description=f"epoch {epoch}")
-        for x, y in progress:
-            # forward
-            x = x.cuda()
-            y = y.cuda()
-            nb_samples += len(x)
-            model.train()
-            optimizer.zero_grad()
-            with autocast(device_type="cuda"):
-                y_pred = model(x)
-            loss_value = (y_pred - y).abs().mean()
-            # Verify loss value
-            if torch.isnan(loss_value).any().item():
-                print("Warning: Got NaN loss, something went wrong.")
-                return DF.from_records(metrics) 
-            if torch.isinf(loss_value).any().item():
-                print("Warning: Got infinite loss, something went wrong.")
-                return DF.from_records(metrics) 
-            # backward
-            scaler.scale(loss_value).backward()
-            # optional grad clipping ?
-            scaler.step(optimizer)
-            scaler.update()
-            if step: # If it's not the first training step
-                # Call the scheduler step method, idk why it throws an error otherwise
-                scheduler.step()
-            # metrics
-            total_epoch_loss += loss_value.item()
-            metrics.append({
-                "step": step,
-                "epoch": epoch,
-                "batch_train_loss": loss_value.item(),
-                "lr": optimizer.state_dict()["param_groups"][-1]["lr"],
-            })
-            step += 1
+        with Progress() as progress:
+            task: Task = progress.add_task(
+                f"epoch: {epoch + 1}, batch_loss: ...",
+                total=len(train_loader) - 10,
+            )
+            for batch_idx, (x, y) in enumerate(train_loader):
+                # forward
+                x = x.cuda()
+                y = y.cuda()
+                nb_samples += len(x)
+                model.train()
+                optimizer.zero_grad()
+                with autocast(device_type="cuda"):
+                    y_pred = model(x)
+                    loss_value = criterion(y_pred, y)
+                # Verify loss value
+                if torch.isnan(loss_value).any().item():
+                    progress.print("Warning: Got NaN loss, something went wrong.")
+                    return DF.from_records(metrics) 
+                if torch.isinf(loss_value).any().item():
+                    progress.print("Warning: Got infinite loss, something went wrong.")
+                    return DF.from_records(metrics) 
+                # backward
+                scaler.scale(loss_value).backward()
+                # optional grad clipping ?
+                scaler.step(optimizer)
+                scaler.update()
+                if step > 0: # If it's not the first training step
+                    # Call the scheduler step method, idk why it throws an error otherwise
+                    scheduler.step()
+                # metrics
+                total_epoch_loss += loss_value.item()
+                metrics.append({
+                    "step": step,
+                    "epoch": epoch,
+                    "batch_train_loss": loss_value.item(),
+                    "lr": optimizer.state_dict()["param_groups"][-1]["lr"],
+                })
+                step += 1
+                progress.update(
+                    task,
+                    advance=1,
+                    description=f"epoch: {epoch}, batch_loss: {(total_epoch_loss / batch_idx):.2f}"
+                )
         # Post epoch evalution
         metrics[-1]["train_epoch_loss"] = total_epoch_loss / len(train_loader)
-        print(metrics[-1]["train_epoch_loss"])
+        progress.print(metrics[-1]["train_epoch_loss"])
         if evaluation_func:
-            eval_metrics = evaluation_func()
-            print("evaluation:", eval_metrics)
+            eval_metrics = evaluation_func(model, criterion, validation_loader)
+            progress.print("validation loss:", eval_metrics["validation_loss"])
             metrics[-1].update(eval_metrics)
         # Save checkpoint
-        checkpoint = mk_checkpoint(epoch, model, scheduler, optimizer)
-        is_best_checkpoint = (
-            DF.from_records(metrics)
-            .eval("min_val_loss = validation_loss.min()")
-            .eval("is_best_validation_loss = validation_loss == min_vali_loss")
-            .dropna(subset="is_best_validation_loss")
-            .loc[-1, "is_best_validation_loss"]
-        )
-        save_checkpoint(checkpoint, checkpoints_dir, is_best_checkpoint)
+        if save_checkpoints:
+            checkpoint = mk_checkpoint(epoch, model, scheduler, optimizer)
+            metrics_df = DF.from_records(metrics)
+            best_model_metric = "validation_loss" if "validation_loss" in metrics_df.columns else "train_epoch_loss"
+            is_best_checkpoint = (
+                DF.from_records(metrics)
+                .eval(f"min_{best_model_metric} = {best_model_metric}.min()")
+                .eval(f"is_best_{best_model_metric} = {best_model_metric} == min_{best_model_metric}")
+                .dropna(subset=f"is_best_{best_model_metric}")
+                .iloc[-1]
+                .loc[f"is_best_{best_model_metric}"]
+            )
+            save_checkpoint(checkpoint, checkpoints_dir, is_best_checkpoint)
 
     return DF.from_records(metrics)
 
@@ -86,7 +103,7 @@ def evaluate_model(model: torch.nn.Module, critirion:callable, validation_loader
     model = model.eval()
 
     total_test_loss = 0
-    for x, y in track(validation_loader, description="evaluating..."):
+    for x, y in track(validation_loader, description="Evaluating...", transient=True):
         x = x.cuda()
         y = y.cuda()
         with autocast("cuda"), torch.no_grad():

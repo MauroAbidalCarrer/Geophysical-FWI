@@ -14,7 +14,7 @@ from config import DATASET_STATS_HANDLE
 stats_type = dict[str, dict[str, dict[str, Tensor]]]
 
 def get_training_stats() -> stats_type:
-    stats_path = dataset_download(DATASET_STATS_HANDLE)
+    stats_path = dataset_download(DATASET_STATS_HANDLE, "train_dataset_stats.json")
     return load_stats_from_json(stats_path)
 
 def load_stats_from_json(filepath: str) -> stats_type:

@@ -9,15 +9,21 @@ from config import CHANNELS_DIMENSION
 from datasets_stats import get_training_stats
 
 
-def mk_model(to_cuda=True, stats=None) -> nn.Module:
-    if stats is None:
-        stats = get_training_stats()
+def mk_model(to_cuda=True, dataset_stats=None) -> nn.Module:
+    if dataset_stats is None:
+        print("Used pixel wise training stats.")
+        dataset_stats = get_training_stats()["pixel_wise_stats"]
+    if to_cuda:
+        for k, val in dataset_stats.items():
+            for k_2, val_2 in val.items():
+                if isinstance(val_2, Tensor):
+                    dataset_stats[k][k_2] = val_2.cuda()
     model = UNet(
         in_channels=5,
         out_channels=1,
         start_features=32,
         depth=4,
-        stats=stats,
+        dataset_stats=dataset_stats,
     )
     if to_cuda:
         return model.cuda()
