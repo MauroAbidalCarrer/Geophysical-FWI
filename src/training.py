@@ -73,11 +73,10 @@ def fit(epochs:int,
                 progress.update(
                     task,
                     advance=1,
-                    description=f"epoch: {epoch}, batch_loss: {(total_epoch_loss / batch_idx):.2f}"
+                    description=f"epoch: {epoch}, batch_loss: {(total_epoch_loss / (batch_idx+1)):.2f}"
                 )
         # Post epoch evalution
         metrics[-1]["train_epoch_loss"] = total_epoch_loss / len(train_loader)
-        progress.print(metrics[-1]["train_epoch_loss"])
         if evaluation_func:
             eval_metrics = evaluation_func(model, criterion, validation_loader)
             progress.print("validation loss:", eval_metrics["validation_loss"])

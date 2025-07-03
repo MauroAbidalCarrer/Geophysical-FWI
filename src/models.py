@@ -62,8 +62,8 @@ class UNet(nn.Module):
         out = self.bottle_neck_block(encoder_outputs[-1])
         for up_block, encode_output in zip(self.up_blocks, encoder_outputs[::-1]):
             out = decode(out, encode_output, up_block)
-        out = self.head_conv(out)
-        scaled_out = out * self.dataset_stats["y"]["std"] + self.dataset_stats["y"]["mean"]
+        self.logits = self.head_conv(out) # save logits for later inspection
+        scaled_out = self.logits * self.dataset_stats["y"]["std"] + self.dataset_stats["y"]["mean"]
         return scaled_out
 
 class ResidualBlock(nn.Module):
