@@ -1,10 +1,7 @@
 # See kaggle competition page: https://www.kaggle.com/competitions/waveform-inversion
 # See preprocessed test dataset: https://www.kaggle.com/datasets/egortrushin/open-wfi-test
 # See kaggle preprocessed train and validation datasets page: https://www.kaggle.com/datasets/brendanartley/openfwi-preprocessed-72x72
-import json
-from os import listdir
-from pathlib import Path
-from os.path import join, exists, splitext
+from os.path import join
 
 import torch
 import numpy as np
@@ -48,14 +45,15 @@ def _load_dataset_tensors(split:str, nb_files=None) -> tuple[Tensor, Tensor]:
     )
     nb_files = nb_files if nb_files else len(meta_df)
     tensors_it = lambda path, files_group: track(meta_df.loc[:nb_files, path], files_group)
-    x = [_load_npy_file_as_tensor(dataset_path, f_path) for f_path in tensors_it("data_fpath", "loading inputs")]
-    y = [_load_npy_file_as_tensor(dataset_path, f_path) for f_path in tensors_it("label_fpath", "loading outputs")]
+    x = [_load_npy_fie(dataset_path, f_path) for f_path in tensors_it("data_fpath", "loading inputs")]
+    y = [_load_npy_fie(dataset_path, f_path) for f_path in tensors_it("label_fpath", "loading outputs")]
 
     return x, y
 
-def _load_npy_file_as_tensor(dataset_path:str, path_in_dataset: str) -> torch.Tensor:
+def _load_npy_fie(dataset_path:str, path_in_dataset: str) -> torch.Tensor:
     path = join(dataset_path, 'openfwi_72x72', path_in_dataset)
-    return torch.from_numpy(np.load(path))
+    # return torch.from_numpy(np.load(path))
+    return np.load(path, mmap_mode="r")
 
 def _check_dataset_shape(split:str):
     dataset = TrainValidationPreprocessedOpenFWI(split)
