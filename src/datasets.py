@@ -22,8 +22,8 @@ class TrainValidationPreprocessedOpenFWI(torch.utils.data.Dataset):
         list_idx = idx // SAMPLES_PER_NPY_FILE
         tensor_idx = idx % SAMPLES_PER_NPY_FILE
         return (
-            self.x[list_idx][tensor_idx],
-            self.y[list_idx][tensor_idx],
+            self.x[list_idx][tensor_idx].copy(),
+            self.y[list_idx][tensor_idx].copy(),
         )
 
     def __len__(self):
