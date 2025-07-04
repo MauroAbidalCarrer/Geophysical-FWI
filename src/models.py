@@ -6,20 +6,38 @@ from torch import Tensor
 from torch.nn.functional import max_pool2d, interpolate
 
 from config import CHANNELS_DIMENSION
+from datasets_stats import get_training_stats
 
-def mk_model(to_cuda=True) -> nn.Module:
+
+def mk_model(to_cuda=True, dataset_stats=None) -> nn.Module:
+    if dataset_stats is None:
+        print("Used pixel wise training stats.")
+        dataset_stats = get_training_stats()["pixel_wise_stats"]
+    if to_cuda:
+        for k, val in dataset_stats.items():
+            for k_2, val_2 in val.items():
+                if isinstance(val_2, Tensor):
+                    dataset_stats[k][k_2] = val_2.cuda()
     model = UNet(
         in_channels=5,
         out_channels=1,
         start_features=32,
-        depth=4
+        depth=4,
+        dataset_stats=dataset_stats,
     )
     if to_cuda:
         return model.cuda()
     return model
 
 class UNet(nn.Module):
-    def __init__(self, in_channels:int, out_channels:int, start_features:int, depth:int, dataset_stats:dict[str, float]={}):
+    def __init__(
+        self,
+        in_channels:int,
+        out_channels:int,
+        start_features:int,
+        depth:int,
+        dataset_stats:dict[str, dict],
+        ):
         super().__init__()
         # TODO: Check that this will be saved when serializing the weights to a pth file
         self.dataset_stats = dataset_stats
@@ -39,14 +57,14 @@ class UNet(nn.Module):
         self.head_conv = nn.Conv2d(out_channels, out_channels, 3)
 
     def forward(self, x:Tensor) -> Tensor:
-        # normed_x = (x - self.dataset_stats.get("x_mean", 0)) / self.dataset_stats.get("x_std", 1)
-        encoder_outputs = list(accumulate(self.down_blocks, encode, initial=x))
+        normed_x = (x - self.dataset_stats["x"]["mean"]) / self.dataset_stats["x"]["std"]
+        encoder_outputs = list(accumulate(self.down_blocks, encode, initial=normed_x))
         out = self.bottle_neck_block(encoder_outputs[-1])
         for up_block, encode_output in zip(self.up_blocks, encoder_outputs[::-1]):
             out = decode(out, encode_output, up_block)
-        out = self.head_conv(out)
-        # scaled_out = out * self.dataset_stats.get("y_std", 1) + self.dataset_stats.get("y_mean", 0)
-        return out
+        self.logits = self.head_conv(out) # save logits for later inspection
+        scaled_out = self.logits * self.dataset_stats["y"]["std"] + self.dataset_stats["y"]["mean"]
+        return scaled_out
 
 class ResidualBlock(nn.Module):
     """2 Convulution block + residual"""
