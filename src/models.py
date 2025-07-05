@@ -5,8 +5,8 @@ from torch import nn
 from torch import Tensor
 from torch.nn.functional import max_pool2d, interpolate
 
-from config import CHANNELS_DIMENSION
 from datasets_stats import get_training_stats
+from config import PIXEL_WISE_STD_EPSILON, CHANNELS_DIMENSION
 
 
 def mk_model(to_cuda=True, dataset_stats=None) -> nn.Module:
@@ -57,7 +57,8 @@ class UNet(nn.Module):
         self.head_conv = nn.Conv2d(out_channels, out_channels, 3)
 
     def forward(self, x:Tensor) -> Tensor:
-        normed_x = (x - self.dataset_stats["x"]["mean"]) / self.dataset_stats["x"]["std"]
+        x_std = torch.clamp(self.dataset_stats["x"]["std"], min=PIXEL_WISE_STD_EPSILON)
+        normed_x = (x - self.dataset_stats["x"]["mean"]) / x_std
         encoder_outputs = list(accumulate(self.down_blocks, encode, initial=normed_x))
         out = self.bottle_neck_block(encoder_outputs[-1])
         for up_block, encode_output in zip(self.up_blocks, encoder_outputs[::-1]):
